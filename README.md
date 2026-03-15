@@ -92,3 +92,10 @@ python adaptive_cognitive_ai.py
 Do **not** use `python adaptive_cognitive_ai.py && python train_ai.py` as a start command, because the web process must stay alive and bind to `$PORT`.
 
 A ready `render.yaml` is included with build/start commands.
+
+If your Render dashboard has custom commands, ensure they are exactly:
+
+- Build command: `pip install -r requirements.txt && python train_ai.py`
+- Start command: `python adaptive_cognitive_ai.py`
+
+Also pin Python to 3.12 for torch wheel compatibility (this repo includes `runtime.txt`).
