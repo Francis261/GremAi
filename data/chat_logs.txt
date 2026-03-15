@@ -1,0 +1,22 @@
+user: Hello, can you plan how to make coffee?
+assistant: improves caright, now. overall confidence: 0.93.
+user: hello, I feel great today
+assistant: laboration Inference hint: mammal -> organism (0.81).
+user: what do you know about photosynthesis
+assistant: t requires network Inference hint: mammal -> organism (0.81).
+user: cat is a mammal
+assistant: e subtasks in order. 4) evaluate outcome and adapt. i am using recent context tokens: user, hello, i, feel, great, today, ai, hello. overall confidence: 0.93. Inference hint: mammal -> organism (0.81).
+user: mammal is an animal
+assistant: t requires income Inference hint: mammal -> organism (0.81).
+user: animal is an organism
+assistant: requires attendees Inference hint: mammal -> organism (0.81).
+user: make coffee for two people quickly
+assistant: t requires water Inference hint: mammal -> organism (0.81).
+user: I am upset because the answer was bad
+assistant: causes rain probability increase Inference hint: mammal -> organism (0.81).
+user: is rain likely with dark clouds and high humidity
+assistant: requires mitigation strategy Inference hint: mammal -> organism (0.81).
+user: organize a meeting for tomorrow
+assistant: plan requires schedule Inference hint: mammal -> organism (0.81).
+user: thanks, this was helpful
+assistant: causes process improvement Inference hint: mammal -> organism (0.81).

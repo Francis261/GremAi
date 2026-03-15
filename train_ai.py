@@ -1,8 +1,4 @@
-"""Offline trainer for Adaptive Cognitive AI.
-
-Loads multiple CSV datasets and performs synthetic conversations
-so the deployed app starts with useful memory.
-"""
+"""Offline trainer for Adaptive Cognitive AI including neural generator artifacts."""
 
 from pathlib import Path
 
@@ -45,6 +41,9 @@ def main() -> None:
         ai.apply_feedback(reward_positive)
         print(f"[chat-{i}] conf={result.confidence:.2f} sentiment={result.sentiment:.2f} reward={'+' if reward_positive else '-'}")
 
+    # retrain neural model with newest chat logs + memory corpus
+    metrics = ai.neural_bridge.ensure_ready(ai.dataset_dir, ai.vector_memory, ai.chat_log_path)
+    print(f"[neural] metrics={metrics}")
     print(f"Training complete using {total} datasets. DB written to {DB_PATH}")
 
 

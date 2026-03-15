@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Tuple
 import gradio as gr
 import numpy as np
 
+from model.neural_generator import NeuralGenerator
+
 
 @dataclass
 class CognitiveResult:
@@ -24,12 +26,7 @@ class CognitiveResult:
 
 
 class VectorMemorySQLite:
-    """
-    Lightweight vector memory backed by SQLite.
-
-    Stores concepts, entities, and facts as embeddings and supports
-    relation composition via circular convolution.
-    """
+    """SQLite-backed vector memory for facts, responses and relation embeddings."""
 
     def __init__(self, db_path: str = "cognitive_memory.db", embedding_dim: int = 128):
         self.db_path = db_path
@@ -58,12 +55,6 @@ class VectorMemorySQLite:
         return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
 
     def embed_text(self, text: str) -> np.ndarray:
-        """
-        Interpretable hash-based embedding (no external model).
-
-        Uses deterministic random projections per token to stay CPU-friendly and
-        incrementally adjustable through memory updates.
-        """
         tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
         if not tokens:
             return np.zeros(self.embedding_dim, dtype=np.float32)
@@ -71,19 +62,13 @@ class VectorMemorySQLite:
         vec = np.zeros(self.embedding_dim, dtype=np.float32)
         for token in tokens:
             rng = np.random.default_rng(self._token_to_seed(token))
-            token_vec = rng.normal(0.0, 1.0, self.embedding_dim).astype(np.float32)
-            vec += token_vec
+            vec += rng.normal(0.0, 1.0, self.embedding_dim).astype(np.float32)
 
         norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec /= norm
-        return vec
+        return vec / norm if norm > 0 else vec
 
     def circular_convolution(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-        """Compose relation vectors using circular convolution."""
-        fa = np.fft.fft(a)
-        fb = np.fft.fft(b)
-        conv = np.fft.ifft(fa * fb).real.astype(np.float32)
+        conv = np.fft.ifft(np.fft.fft(a) * np.fft.fft(b)).real.astype(np.float32)
         norm = np.linalg.norm(conv)
         return conv / norm if norm > 0 else conv
 
@@ -104,39 +89,42 @@ class VectorMemorySQLite:
         )
         self.conn.commit()
 
-    def fetch_top_k(self, query: str, k: int = 5, kind: Optional[str] = None) -> List[Tuple[str, float, dict]]:
+    def fetch_top_k(self, query: str, k: int = 5, kind: Optional[str] = None) -> List[Tuple[int, str, float, dict]]:
         query_vec = self.embed_text(query)
         cur = self.conn.cursor()
         if kind:
-            cur.execute("SELECT text, embedding, reward, usage_count, metadata FROM vectors WHERE kind=?", (kind,))
+            cur.execute("SELECT id, text, embedding, reward, usage_count, metadata FROM vectors WHERE kind=?", (kind,))
         else:
-            cur.execute("SELECT text, embedding, reward, usage_count, metadata FROM vectors")
+            cur.execute("SELECT id, text, embedding, reward, usage_count, metadata FROM vectors")
 
         scored = []
-        for text, emb_blob, reward, usage_count, metadata in cur.fetchall():
+        for rid, text, emb_blob, reward, usage_count, metadata in cur.fetchall():
             emb = np.frombuffer(emb_blob, dtype=np.float32)
             sim = float(np.dot(query_vec, emb)) if emb.size == query_vec.size else 0.0
             adaptive_score = sim + 0.05 * math.tanh(reward) + 0.02 * math.log1p(max(usage_count, 1))
-            scored.append((text, adaptive_score, json.loads(metadata or "{}")))
+            scored.append((rid, text, adaptive_score, json.loads(metadata or "{}")))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda x: x[2], reverse=True)
         return scored[:k]
+
+    def all_texts(self, kinds: Optional[List[str]] = None) -> List[str]:
+        cur = self.conn.cursor()
+        if kinds:
+            placeholders = ",".join(["?"] * len(kinds))
+            cur.execute(f"SELECT text FROM vectors WHERE kind IN ({placeholders})", tuple(kinds))
+        else:
+            cur.execute("SELECT text FROM vectors")
+        return [r[0] for r in cur.fetchall()]
 
 
 class KnowledgeGraph:
-    """Dynamic entity relation graph with transitive inference."""
+    """Dynamic entity-relation store with transitive inference."""
 
     def __init__(self):
         self.edges: Dict[str, List[Tuple[str, str, float]]] = {}
 
     def add_relation(self, subject: str, relation: str, obj: str, confidence: float = 0.8) -> None:
-        subject = subject.strip().lower()
-        obj = obj.strip().lower()
-        relation = relation.strip().lower()
-        self.edges.setdefault(subject, []).append((relation, obj, confidence))
-
-    def query(self, subject: str) -> List[Tuple[str, str, float]]:
-        return self.edges.get(subject.strip().lower(), [])
+        self.edges.setdefault(subject.strip().lower(), []).append((relation.strip().lower(), obj.strip().lower(), confidence))
 
     def transitive_inference(self, relation_type: str = "is_a") -> List[Tuple[str, str, float]]:
         derived = []
@@ -146,29 +134,27 @@ class KnowledgeGraph:
                     continue
                 for rel2, c, c2 in self.edges.get(b, []):
                     if rel2 == relation_type and a != c:
-                        conf = c1 * c2
-                        derived.append((a, c, conf))
+                        derived.append((a, c, c1 * c2))
         return derived
 
     def from_text(self, text: str) -> List[Tuple[str, str, str]]:
-        """Extract simple relation triples from natural text."""
         patterns = [
             (r"(.+)\s+is a\s+(.+)", "is_a"),
             (r"(.+)\s+part of\s+(.+)", "part_of"),
             (r"(.+)\s+causes\s+(.+)", "causes"),
             (r"(.+)\s+requires\s+(.+)", "requires"),
         ]
-        triples = []
         low = text.lower().strip(" .!?")
+        out = []
         for p, rel in patterns:
             m = re.match(p, low)
             if m:
-                triples.append((m.group(1).strip(), rel, m.group(2).strip()))
-        return triples
+                out.append((m.group(1).strip(), rel, m.group(2).strip()))
+        return out
 
 
 class ContextMemory:
-    """Tracks short-term and long-term context memory."""
+    """Short-term dialogue memory and long-term salience map."""
 
     def __init__(self, short_limit: int = 8):
         self.short_limit = short_limit
@@ -178,29 +164,26 @@ class ContextMemory:
     def add_interaction(self, user_text: str, ai_text: str, sentiment: float) -> None:
         self.short_term.append((user_text, ai_text))
         self.short_term = self.short_term[-self.short_limit :]
-
-        for token in re.findall(r"[a-zA-Z0-9']+", (user_text + " " + ai_text).lower()):
-            self.long_term[token] = self.long_term.get(token, 0.0) + (0.5 + sentiment * 0.5)
+        for token in re.findall(r"[a-zA-Z0-9']+", f"{user_text} {ai_text}".lower()):
+            if len(token) > 2 and token not in {"confidence", "memory", "context"}:
+                self.long_term[token] = self.long_term.get(token, 0.0) + (0.4 + sentiment * 0.4)
 
     def get_recent_context(self) -> str:
-        merged = []
+        rows = []
         for u, a in self.short_term[-4:]:
-            merged.append(f"user:{u}")
-            merged.append(f"ai:{a}")
-        return " | ".join(merged)
+            rows.append(f"user:{u}")
+            rows.append(f"assistant:{a}")
+        return " | ".join(rows)
 
-    def salient_tokens(self, n: int = 6) -> List[str]:
+    def salient_tokens(self, n: int = 8) -> List[str]:
         return [w for w, _ in sorted(self.long_term.items(), key=lambda x: x[1], reverse=True)[:n]]
 
 
 class ResponseGeneratorDynamic:
-    """Builds responses from reasoning signals, memory, and feedback-learned patterns."""
+    """Reasoning signals + planning + sentiment used for conditioning the neural generator."""
 
     positive_words = {"great", "good", "helpful", "thanks", "excellent", "love", "happy", "awesome"}
     negative_words = {"bad", "wrong", "hate", "angry", "terrible", "sad", "upset", "frustrated"}
-
-    def __init__(self):
-        self.pattern_memory: Dict[str, float] = {}
 
     def detect_sentiment(self, text: str) -> float:
         tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
@@ -212,8 +195,7 @@ class ResponseGeneratorDynamic:
 
     def bayesian_confidence(self, evidence_score: float, prior: float = 0.5) -> float:
         likelihood = min(max(0.5 + 0.5 * evidence_score, 0.01), 0.99)
-        posterior = (likelihood * prior) / (likelihood * prior + (1 - likelihood) * (1 - prior))
-        return float(posterior)
+        return float((likelihood * prior) / (likelihood * prior + (1 - likelihood) * (1 - prior)))
 
     def hierarchical_plan(self, text: str) -> List[str]:
         words = [w for w in re.findall(r"[a-zA-Z0-9']+", text.lower()) if len(w) > 2]
@@ -227,123 +209,102 @@ class ResponseGeneratorDynamic:
             "Evaluate outcome and adapt",
         ]
 
-    def update_pattern(self, response: str, reward: float) -> None:
-        key = " ".join(re.findall(r"[a-zA-Z0-9']+", response.lower())[:14])
-        if not key:
-            return
-        self.pattern_memory[key] = self.pattern_memory.get(key, 0.0) + reward
 
-    def _style_vector(self, sentiment: float) -> Dict[str, float]:
-        warm = max(0.0, sentiment)
-        careful = max(0.0, -sentiment)
-        return {"warm": warm, "careful": careful, "neutral": 1 - abs(sentiment)}
+class NeuralResponseBridge:
+    """Connects symbolic signals to neural text generation and rationale metadata."""
 
-    def _extract_focus(self, user_text: str, facts: List[Tuple[str, float, dict]], salients: List[str]) -> List[str]:
-        user_tokens = [t for t in re.findall(r"[a-zA-Z0-9']+", user_text.lower()) if len(t) > 2]
-        token_weights: Dict[str, float] = {}
-        for tok in user_tokens:
-            token_weights[tok] = token_weights.get(tok, 0.0) + 2.0
-        for fact, score, _ in facts:
-            for tok in re.findall(r"[a-zA-Z0-9']+", fact.lower()):
-                if len(tok) > 2:
-                    token_weights[tok] = token_weights.get(tok, 0.0) + max(0.1, score)
-        for tok in salients:
-            if len(tok) > 2:
-                token_weights[tok] = token_weights.get(tok, 0.0) + 0.8
-        for pattern, reward in self.pattern_memory.items():
-            if reward <= 0:
-                continue
-            for tok in pattern.split():
-                if len(tok) > 2:
-                    token_weights[tok] = token_weights.get(tok, 0.0) + 0.2 * reward
-        return [t for t, _ in sorted(token_weights.items(), key=lambda x: x[1], reverse=True)[:8]]
+    def __init__(self, artifact_dir: str = "artifacts/neural"):
+        self.neural = NeuralGenerator(artifact_dir=artifact_dir)
+
+    def _build_training_texts(self, dataset_dir: Path, vector_memory: VectorMemorySQLite, chat_log_path: Path) -> List[str]:
+        texts = []
+        for csv_file in sorted(dataset_dir.glob("*.csv")):
+            with open(csv_file, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("text"):
+                        texts.append(row["text"])
+                    if row.get("subject") and row.get("relation") and row.get("object"):
+                        texts.append(f"{row['subject']} {row['relation']} {row['object']}")
+
+        texts.extend(vector_memory.all_texts(["fact", "response"]))
+        if chat_log_path.exists():
+            for line in chat_log_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    texts.append(line.strip())
+        return texts
+
+    def ensure_ready(self, dataset_dir: Path, vector_memory: VectorMemorySQLite, chat_log_path: Path) -> Dict[str, float]:
+        if self.neural.is_ready():
+            self.neural.load()
+            return {"status": 1.0}
+        texts = self._build_training_texts(dataset_dir, vector_memory, chat_log_path)
+        return self.neural.train_from_texts(texts, epochs=3)
 
     def generate(
         self,
         user_text: str,
-        facts: List[Tuple[str, float, dict]],
+        facts: List[Tuple[int, str, float, dict]],
+        plan: List[str],
         context: str,
         salients: List[str],
-        inferred_relations: List[Tuple[str, str, float]],
-    ) -> CognitiveResult:
-        sentiment = self.detect_sentiment(user_text)
-        evidence = float(np.mean([score for _, score, _ in facts])) if facts else 0.0
-        confidence = self.bayesian_confidence(evidence)
-        is_planning = any(w in user_text.lower() for w in ["make", "build", "plan", "organize", "prepare"])
-        plan = self.hierarchical_plan(user_text) if is_planning else []
-        style = self._style_vector(sentiment)
-        focus_terms = self._extract_focus(user_text, facts, salients)
+        sentiment: float,
+        confidence: float,
+    ) -> Tuple[str, Dict[str, float], str]:
+        fact_ids = [str(rid) for rid, *_ in facts]
+        fact_texts = [t for _, t, _, _ in facts[:3]]
 
-        greeting = "Hello." if re.search(r"\b(hi|hello|hey)\b", user_text.lower()) else ""
-        tone_sentence = ""
-        if style["warm"] > 0.2:
-            tone_sentence = "I can feel the positive tone in your message."
-        elif style["careful"] > 0.2:
-            tone_sentence = "I notice some frustration, so I will keep this clear and careful."
+        condition = [
+            f"user: {user_text}",
+            f"sentiment: {sentiment:.2f}",
+            f"confidence_prior: {confidence:.2f}",
+            f"facts: {' | '.join(fact_texts) if fact_texts else 'none'}",
+            f"plan: {' | '.join(plan) if plan else 'none'}",
+            f"salient: {', '.join(salients[:6]) if salients else 'none'}",
+            f"context: {context[:260] if context else 'none'}",
+            "assistant:",
+        ]
+        prompt = "\n".join(condition)
+        generated, meta = self.neural.generate(prompt, temperature=0.75, top_k=40, top_p=0.9, repetition_penalty=1.12)
 
-        anchor_fact = facts[0][0] if facts else ""
-        anchor_sentence = f"Most relevant memory right now: {anchor_fact}." if anchor_fact else ""
-
-        inference_sentence = ""
-        if inferred_relations:
-            a, c, conf = inferred_relations[0]
-            inference_sentence = f"Graph inference suggests {a} -> {c} (confidence {conf:.2f})."
-
-        focus_sentence = f"Key focus terms: {', '.join(focus_terms)}." if focus_terms else ""
-
-        plan_sentence = ""
-        if plan:
-            numbered = " ".join([f"{idx + 1}) {step}." for idx, step in enumerate(plan)])
-            plan_sentence = f"Proposed plan: {numbered}"
-
-        context_sentence = ""
-        if context:
-            ctx_tokens = re.findall(r"[a-zA-Z0-9']+", context.lower())[:8]
-            if ctx_tokens:
-                context_sentence = f"I am using recent context tokens: {', '.join(ctx_tokens)}."
-
-        segments = [greeting, tone_sentence, anchor_sentence, inference_sentence, focus_sentence, plan_sentence, context_sentence]
-        response = " ".join([s for s in segments if s]).strip()
+        response = generated.strip()
         if not response:
-            response = "I have limited evidence right now, but I can learn quickly from more examples and feedback."
-        response += f" Overall confidence: {confidence:.2f}."
+            response = "I can help with that. Based on current memory, please share one more detail so I can refine the answer."
 
-        context_token_count = len(re.findall(r"[a-zA-Z0-9']+", context))
-        thinking = (
-            f"sentiment={sentiment:.2f}; evidence={evidence:.2f}; posterior={confidence:.2f}; "
-            f"facts_used={len(facts)}; context_tokens={context_token_count}; "
-            f"plan_steps={len(plan)}; focus_terms={focus_terms[:4]}"
-        )
-
-        return CognitiveResult(
-            response=response,
-            thinking=thinking,
-            confidence=confidence,
-            retrieved_facts=[f for f, _, _ in facts],
-            sentiment=sentiment,
-        )
+        rationale = f"retrieval_ids={fact_ids}; neural_entropy={meta.get('avg_entropy', 0.0):.3f}; neural_steps={int(meta.get('steps', 0))}"
+        return response, meta, rationale
 
 
 class AdaptiveCognitiveAI:
-    """Main orchestrator combining memory, graph reasoning, planning, and feedback learning."""
+    """Main orchestrator for memory, graph reasoning, and neural response generation."""
 
     def __init__(self, db_path: str = "cognitive_memory.db"):
         self.vector_memory = VectorMemorySQLite(db_path=db_path)
         self.knowledge_graph = KnowledgeGraph()
         self.context_memory = ContextMemory()
-        self.generator = ResponseGeneratorDynamic()
+        self.rule_generator = ResponseGeneratorDynamic()
+        self.neural_bridge = NeuralResponseBridge()
+        self.dataset_dir = Path("data/datasets")
+        self.chat_log_path = Path("data/chat_logs.txt")
         self.last_response: Optional[str] = None
+        self._boot_info = self.neural_bridge.ensure_ready(self.dataset_dir, self.vector_memory, self.chat_log_path)
 
     def _ingest_text(self, text: str) -> None:
         self.vector_memory.upsert_memory(text, kind="fact", reward=0.01)
         for s, rel, o in self.knowledge_graph.from_text(text):
             self.knowledge_graph.add_relation(s, rel, o)
-            s_vec = self.vector_memory.embed_text(s)
-            o_vec = self.vector_memory.embed_text(o)
-            rel_vec = self.vector_memory.circular_convolution(s_vec, o_vec)
+            rel_vec = self.vector_memory.circular_convolution(self.vector_memory.embed_text(s), self.vector_memory.embed_text(o))
             self.vector_memory.upsert_memory(
-                f"{s} {rel} {o}", kind="relation", reward=0.02, metadata={"relation": rel, "conv_norm": float(np.linalg.norm(rel_vec))}
+                f"{s} {rel} {o}",
+                kind="relation",
+                reward=0.02,
+                metadata={"relation": rel, "conv_norm": float(np.linalg.norm(rel_vec))},
             )
+
+    def _append_chat_log(self, user_text: str, response: str) -> None:
+        self.chat_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.chat_log_path, "a", encoding="utf-8") as f:
+            f.write(f"user: {user_text}\nassistant: {response}\n")
 
     def chat(self, user_text: str) -> CognitiveResult:
         self._ingest_text(user_text)
@@ -351,20 +312,53 @@ class AdaptiveCognitiveAI:
         inferred = self.knowledge_graph.transitive_inference("is_a")
         context = self.context_memory.get_recent_context()
         salients = self.context_memory.salient_tokens()
-        result = self.generator.generate(user_text, facts, context, salients, inferred)
 
-        self.context_memory.add_interaction(user_text, result.response, result.sentiment)
-        self.vector_memory.upsert_memory(result.response, kind="response", reward=0.01)
-        self.generator.update_pattern(result.response, reward=0.02)
-        self.last_response = result.response
-        return result
+        sentiment = self.rule_generator.detect_sentiment(user_text)
+        evidence = float(np.mean([score for _, _, score, _ in facts])) if facts else 0.0
+        confidence = self.rule_generator.bayesian_confidence(evidence)
+        plan = self.rule_generator.hierarchical_plan(user_text) if any(
+            w in user_text.lower() for w in ["make", "build", "plan", "organize", "prepare"]
+        ) else []
+
+        response, meta, rationale = self.neural_bridge.generate(
+            user_text=user_text,
+            facts=facts,
+            plan=plan,
+            context=context,
+            salients=salients,
+            sentiment=sentiment,
+            confidence=confidence,
+        )
+
+        if inferred and "inference" not in response.lower():
+            a, c, conf = inferred[0]
+            response = f"{response} Inference hint: {a} -> {c} ({conf:.2f})."
+
+        self.context_memory.add_interaction(user_text, response, sentiment)
+        self.vector_memory.upsert_memory(response, kind="response", reward=0.01)
+        self.last_response = response
+        self._append_chat_log(user_text, response)
+
+        facts_only = [x[1] for x in facts]
+        thinking = (
+            f"sentiment={sentiment:.2f}; evidence={evidence:.2f}; posterior={confidence:.2f}; "
+            f"facts_used={len(facts)}; plan_steps={len(plan)}; {rationale}; "
+            f"boot_status={self._boot_info}"
+        )
+
+        return CognitiveResult(
+            response=response,
+            thinking=thinking,
+            confidence=confidence,
+            retrieved_facts=facts_only,
+            sentiment=sentiment,
+        )
 
     def apply_feedback(self, positive: bool) -> str:
         if not self.last_response:
             return "No response available for feedback yet."
         reward = 0.5 if positive else -0.3
         self.vector_memory.upsert_memory(self.last_response, kind="response", reward=reward)
-        self.generator.update_pattern(self.last_response, reward=reward)
         return f"Feedback learned with reward {reward:.2f}."
 
     def bulk_train_csv(self, file_path: str) -> str:
@@ -424,7 +418,7 @@ class ChatUI:
     def launch(self):
         datasets = self._available_datasets()
         with gr.Blocks(title="Adaptive Cognitive AI") as demo:
-            gr.Markdown("# Adaptive Cognitive AI\nDynamic interpretable cognition with memory, graph inference, and training.")
+            gr.Markdown("# Adaptive Cognitive AI\nSymbolic + neural hybrid with memory, graph inference, and training.")
             chatbot = gr.Chatbot(label="Conversation", height=420)
             state = gr.State([])
             with gr.Row():
@@ -451,18 +445,6 @@ class ChatUI:
             down.click(lambda: self._feedback(False), outputs=feedback_status)
             train_btn.click(self._bulk_train, inputs=file_in, outputs=train_out)
             train_selected_btn.click(self._train_selected, inputs=dataset_select, outputs=train_out)
-
-            gr.Markdown(
-                """
-### Demo ideas
-- Greetings: *hello there, I feel great today*
-- Q&A: *what do you know about photosynthesis?*
-- Planning: *make coffee for two people quickly*
-- Probabilistic reasoning: *is it likely to rain if clouds are dark?*
-- Teach facts: *cat is a mammal* then *mammal is a vertebrate*
-- Feedback loop: vote up/down to reinforce response patterns
-                """
-            )
 
         demo.launch(server_name="0.0.0.0", server_port=7860)
 

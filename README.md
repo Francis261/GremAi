@@ -1,23 +1,22 @@
-# Adaptive Cognitive AI (No LLM)
+# Adaptive Cognitive AI (No hosted LLM API)
 
-A fully dynamic, interpretable, CPU-friendly cognitive AI prototype in Python with:
+Hybrid symbolic + neural cognitive AI prototype in Python with:
 
-- Dynamic reasoning + response generation (no static response templates)
-- Bayesian confidence updates
-- Hierarchical planning for multi-step tasks
+- Dynamic reasoning, Bayesian confidence, hierarchical planning
 - SQLite vector memory and retrieval (RAG-style top-k facts)
 - Circular convolution for relation encoding
-- Dynamic knowledge graph + transitive inference
+- Dynamic knowledge graph with transitive inference
 - Short-term and long-term context memory
-- Interactive Gradio chat UI with visible internal thinking
-- Feedback-based self-learning and bulk CSV training
+- Neural text generator (compact GRU LM in PyTorch)
+- BPE tokenizer trained from bundled corpora + chat logs
+- Gradio chat UI with visible internal thinking and training controls
 
 ## Install
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install numpy gradio
+pip install numpy gradio torch
 ```
 
 ## Pre-train with bundled datasets
@@ -26,7 +25,7 @@ pip install numpy gradio
 python train_ai.py
 ```
 
-This consumes all CSV files in `data/datasets/` (20 bundled datasets) and writes a warmed-up `cognitive_memory.db` so hosted deployments can chat immediately.
+This ingests all CSV files in `data/datasets/`, updates `cognitive_memory.db`, and builds neural artifacts under `artifacts/neural/`.
 
 ## Run
 
@@ -42,9 +41,7 @@ Open: <http://localhost:7860>
 - Click **Train Selected Datasets**.
 - You can still upload your own CSV and run **Run Bulk Training from Uploaded CSV**.
 
-## CSV training format
-
-Use headers like:
+## CSV format
 
 ```csv
 text,subject,relation,object
@@ -54,6 +51,5 @@ cat is a mammal,,,
 
 ## Notes
 
-- The system is intentionally interpretable and does not use pretrained LLMs.
-- Embeddings are deterministic hash-projection vectors stored in SQLite.
-- `cognitive_memory.db` is committed after offline training for instant startup memory.
+- The system remains interpretable: `AI (thinking)` shows sentiment, posterior confidence, retrieved IDs, and neural-generation metadata.
+- Neural generation uses local PyTorch artifacts and does not call remote LLM APIs.
