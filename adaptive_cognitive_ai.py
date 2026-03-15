@@ -2,6 +2,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -743,7 +744,8 @@ class ChatUI:
             train_btn.click(self._bulk_train, inputs=file_in, outputs=train_out)
             train_selected_btn.click(self._train_selected, inputs=dataset_select, outputs=train_out)
 
-        demo.launch(server_name="0.0.0.0", server_port=7860)
+        port = int(os.getenv("PORT", "7860"))
+        demo.launch(server_name="0.0.0.0", server_port=port)
 
 
 if __name__ == "__main__":

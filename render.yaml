@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: gremai
+    env: python
+    buildCommand: pip install -r requirements.txt && python train_ai.py
+    startCommand: python adaptive_cognitive_ai.py
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

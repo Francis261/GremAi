@@ -76,3 +76,19 @@ The graph layer now persists in SQLite tables and supports:
 - causal chains (`causes`)
 - requirement chains (`requires`)
 - path explanation via `explain_path(...)` integrated into `AI (thinking)`
+
+
+## Render deployment fix
+
+If deploying on Render:
+
+- Install dependencies from `requirements.txt` (includes CPU PyTorch).
+- Use start command:
+
+```bash
+python adaptive_cognitive_ai.py
+```
+
+Do **not** use `python adaptive_cognitive_ai.py && python train_ai.py` as a start command, because the web process must stay alive and bind to `$PORT`.
+
+A ready `render.yaml` is included with build/start commands.
