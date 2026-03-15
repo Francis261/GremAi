@@ -42,3 +42,39 @@ user: organize a meeting for tomorrow
 assistant: plan requires goals Inference hint: mammal -> organism (0.81).
 user: thanks, this was helpful
 assistant: is a communication tool Inference hint: mammal -> organism (0.81).
+user: cat is a mammal
+assistant: requires issue details
+user: mammal is a vertebrate
+assistant: e subtasks in order. 4) evaluate outcome and adapt. i am using recent context tokens: user, hello, i, feel, great, today, ai, hello. overall confidence: 0.93. Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: vertebrate is a chordate
+assistant: habit Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: dark clouds causes rain
+assistant: causes better support Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: rain causes wet roads
+assistant: ork improves focus Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: make coffee requires water
+assistant: improves understanding Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: water requires clean cup
+assistant: lation causes price increase Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: explain transitive cat
+assistant: control requires commits Inference hint: cat -> vertebrate (0.64) via cat-[is_a:0.80]->mammal -> mammal-[is_a:0.80]->vertebrate.
+user: hello, I feel great today
+assistant: t requires for. graph inference suggests mammal -> organism (confidence 0.81). key focus terms: animal, mammal, organism, hello, feel, great, today, confidence. i am using recent context tokens: user, hello, i, feel, great, today, ai, hello. overall confidence: 0.93.
+user: what do you know about photosynthesis
+assistant: get requires income Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: cat is a mammal
+assistant: laboration Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: mammal is an animal
+assistant: t requires issue details Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: animal is an organism
+assistant: improves understanding Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: make coffee for two people quickly
+assistant: make, coffee, for, two, people, quickly, ai. overall confidence: 0.93. Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: I am upset because the answer was bad
+assistant: t requires heat Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: is rain likely with dark clouds and high humidity
+assistant: requires data Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: organize a meeting for tomorrow
+assistant: unt security Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.
+user: thanks, this was helpful
+assistant: t requires oven Inference hint: mammal -> organism (0.81) via mammal-[is_a:0.90]->animal -> animal-[is_a:0.90]->organism.

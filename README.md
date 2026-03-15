@@ -8,7 +8,8 @@ Hybrid symbolic + neural cognitive AI prototype in Python with:
 - Local trainable sentence encoder (co-occurrence + SVD, CPU-friendly)
 - MMR/diversity-aware retrieval + optional recency weighting
 - Circular convolution for relation encoding
-- Dynamic knowledge graph with transitive inference
+- Persistent SQLite knowledge graph (`entities`, `relations`) with confidence updates
+- Multi-hop graph reasoning (direct/transitive/causal/requirement chains) + path explanation
 - Short-term and long-term context memory
 - Neural text generator (compact GRU LM in PyTorch)
 - BPE tokenizer trained from bundled corpora + chat logs
@@ -64,3 +65,14 @@ cat is a mammal,,,
 
 - The system remains interpretable: `AI (thinking)` shows sentiment, posterior confidence, retrieved IDs, and neural-generation metadata.
 - Neural generation uses local PyTorch artifacts and does not call remote LLM APIs.
+
+
+## Knowledge graph reasoning
+
+The graph layer now persists in SQLite tables and supports:
+
+- direct query
+- transitive query (`is_a`)
+- causal chains (`causes`)
+- requirement chains (`requires`)
+- path explanation via `explain_path(...)` integrated into `AI (thinking)`

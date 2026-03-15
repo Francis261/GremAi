@@ -204,24 +204,84 @@ class VectorMemorySQLite:
 
 
 class KnowledgeGraph:
-    """Dynamic entity-relation store with transitive inference."""
+    """Persistent knowledge graph in SQLite with confidence updates and multi-hop reasoning."""
 
-    def __init__(self):
-        self.edges: Dict[str, List[Tuple[str, str, float]]] = {}
+    def __init__(self, db_path: str = "cognitive_memory.db"):
+        self.db_path = db_path
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._init_db()
+
+    def _init_db(self) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id INTEGER NOT NULL,
+                relation TEXT NOT NULL,
+                object_id INTEGER NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                evidence_count INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(subject_id, relation, object_id),
+                FOREIGN KEY(subject_id) REFERENCES entities(id),
+                FOREIGN KEY(object_id) REFERENCES entities(id)
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rel_sro ON relations(subject_id, relation, object_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rel_rel ON relations(relation)")
+        self.conn.commit()
+
+    def _entity_id(self, name: str) -> int:
+        clean = name.strip().lower()
+        cur = self.conn.cursor()
+        cur.execute("INSERT OR IGNORE INTO entities(name) VALUES(?)", (clean,))
+        cur.execute("SELECT id FROM entities WHERE name=?", (clean,))
+        return int(cur.fetchone()[0])
 
     def add_relation(self, subject: str, relation: str, obj: str, confidence: float = 0.8) -> None:
-        self.edges.setdefault(subject.strip().lower(), []).append((relation.strip().lower(), obj.strip().lower(), confidence))
+        sid = self._entity_id(subject)
+        oid = self._entity_id(obj)
+        rel = relation.strip().lower()
 
-    def transitive_inference(self, relation_type: str = "is_a") -> List[Tuple[str, str, float]]:
-        derived = []
-        for a, rels in self.edges.items():
-            for rel1, b, c1 in rels:
-                if rel1 != relation_type:
-                    continue
-                for rel2, c, c2 in self.edges.get(b, []):
-                    if rel2 == relation_type and a != c:
-                        derived.append((a, c, c1 * c2))
-        return derived
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT confidence, evidence_count FROM relations WHERE subject_id=? AND relation=? AND object_id=?",
+            (sid, rel, oid),
+        )
+        row = cur.fetchone()
+
+        if row:
+            old_conf, old_count = float(row[0]), int(row[1])
+            new_count = old_count + 1
+            new_conf = (old_conf * old_count + confidence) / new_count
+            cur.execute(
+                """
+                UPDATE relations
+                SET confidence=?, evidence_count=?, updated_at=CURRENT_TIMESTAMP
+                WHERE subject_id=? AND relation=? AND object_id=?
+                """,
+                (new_conf, new_count, sid, rel, oid),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO relations(subject_id, relation, object_id, confidence, evidence_count)
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (sid, rel, oid, confidence),
+            )
+        self.conn.commit()
 
     def from_text(self, text: str) -> List[Tuple[str, str, str]]:
         patterns = [
@@ -237,6 +297,131 @@ class KnowledgeGraph:
             if m:
                 out.append((m.group(1).strip(), rel, m.group(2).strip()))
         return out
+
+    def query_direct(self, subject: str, relation: Optional[str] = None) -> List[Tuple[str, str, float]]:
+        subject = subject.strip().lower()
+        cur = self.conn.cursor()
+        if relation:
+            cur.execute(
+                """
+                SELECT r.relation, eo.name, r.confidence
+                FROM relations r
+                JOIN entities es ON es.id = r.subject_id
+                JOIN entities eo ON eo.id = r.object_id
+                WHERE es.name=? AND r.relation=?
+                ORDER BY r.confidence DESC
+                """,
+                (subject, relation.strip().lower()),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT r.relation, eo.name, r.confidence
+                FROM relations r
+                JOIN entities es ON es.id = r.subject_id
+                JOIN entities eo ON eo.id = r.object_id
+                WHERE es.name=?
+                ORDER BY r.confidence DESC
+                """,
+                (subject,),
+            )
+        return [(a, b, float(c)) for a, b, c in cur.fetchall()]
+
+    def _neighbors(self, node: str, relation: str) -> List[Tuple[str, float]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT eo.name, r.confidence
+            FROM relations r
+            JOIN entities es ON es.id=r.subject_id
+            JOIN entities eo ON eo.id=r.object_id
+            WHERE es.name=? AND r.relation=?
+            """,
+            (node.strip().lower(), relation.strip().lower()),
+        )
+        return [(n, float(c)) for n, c in cur.fetchall()]
+
+    def _multi_hop_paths(self, start: str, relation: str, max_hops: int = 3) -> List[Tuple[List[Tuple[str, str, str, float]], float]]:
+        start = start.strip().lower()
+        relation = relation.strip().lower()
+        frontier = [([start], [], 1.0)]
+        completed = []
+
+        for _ in range(max_hops):
+            nxt = []
+            for visited, path_edges, conf in frontier:
+                node = visited[-1]
+                for neighbor, edge_conf in self._neighbors(node, relation):
+                    if neighbor in visited:
+                        continue
+                    new_path = path_edges + [(node, relation, neighbor, edge_conf)]
+                    new_conf = conf * edge_conf
+                    completed.append((new_path, new_conf))
+                    nxt.append((visited + [neighbor], new_path, new_conf))
+            frontier = nxt
+            if not frontier:
+                break
+        completed.sort(key=lambda x: x[1], reverse=True)
+        return completed
+
+    def transitive_inference(self, relation_type: str = "is_a", max_hops: int = 3) -> List[Tuple[str, str, float, List[Tuple[str, str, str, float]]]]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT name FROM entities")
+        entities = [r[0] for r in cur.fetchall()]
+        inferred = []
+        for ent in entities:
+            for path, conf in self._multi_hop_paths(ent, relation_type, max_hops=max_hops):
+                if len(path) >= 2:
+                    inferred.append((path[0][0], path[-1][2], conf, path))
+        inferred.sort(key=lambda x: x[2], reverse=True)
+        return inferred[:50]
+
+    def query(self, subject: str, query_type: str = "direct", relation: str = "is_a", max_hops: int = 3):
+        subject = subject.strip().lower()
+        if query_type == "direct":
+            return self.query_direct(subject, relation=None if relation == "*" else relation)
+        if query_type == "transitive":
+            return self._multi_hop_paths(subject, relation=relation, max_hops=max_hops)
+        if query_type == "causal_chain":
+            return self._multi_hop_paths(subject, relation="causes", max_hops=max_hops)
+        if query_type == "requirement_chain":
+            return self._multi_hop_paths(subject, relation="requires", max_hops=max_hops)
+        return []
+
+    @staticmethod
+    def _format_path(path_edges: List[Tuple[str, str, str, float]]) -> str:
+        return " -> ".join([f"{a}-[{r}:{c:.2f}]->{b}" for a, r, b, c in path_edges])
+
+    def explain_path(self, query: str) -> str:
+        """
+        Query examples:
+          - "explain transitive cat"
+          - "explain causes dark clouds"
+          - "explain requires make coffee"
+        """
+        low = query.lower().strip()
+        m = re.search(r"explain\s+(transitive|causes|requires|direct)\s+(.+)", low)
+        if not m:
+            return "no_explicit_explain_query"
+
+        qtype = m.group(1)
+        subject = m.group(2).strip()
+        if qtype == "transitive":
+            paths = self.query(subject, query_type="transitive", relation="is_a", max_hops=3)
+        elif qtype == "causes":
+            paths = self.query(subject, query_type="causal_chain", max_hops=3)
+        elif qtype == "requires":
+            paths = self.query(subject, query_type="requirement_chain", max_hops=3)
+        else:
+            direct = self.query(subject, query_type="direct", relation="*")
+            if not direct:
+                return "no_direct_edges"
+            return " | ".join([f"{subject}-[{r}:{c:.2f}]->{o}" for r, o, c in direct[:5]])
+
+        if not paths:
+            return "no_path_found"
+        path_edges, conf = paths[0]
+        return f"{self._format_path(path_edges)} (path_conf={conf:.2f})"
 
 
 class ContextMemory:
@@ -366,7 +551,7 @@ class AdaptiveCognitiveAI:
 
     def __init__(self, db_path: str = "cognitive_memory.db"):
         self.vector_memory = VectorMemorySQLite(db_path=db_path)
-        self.knowledge_graph = KnowledgeGraph()
+        self.knowledge_graph = KnowledgeGraph(db_path=db_path)
         self.context_memory = ContextMemory()
         self.rule_generator = ResponseGeneratorDynamic()
         self.neural_bridge = NeuralResponseBridge()
@@ -419,7 +604,8 @@ class AdaptiveCognitiveAI:
     def chat(self, user_text: str) -> CognitiveResult:
         self._ingest_text(user_text)
         facts = self.vector_memory.fetch_top_k(user_text, k=5)
-        inferred = self.knowledge_graph.transitive_inference("is_a")
+        inferred = self.knowledge_graph.transitive_inference("is_a", max_hops=3)
+        explain_trace = self.knowledge_graph.explain_path(user_text)
         context = self.context_memory.get_recent_context()
         salients = self.context_memory.salient_tokens()
 
@@ -441,8 +627,9 @@ class AdaptiveCognitiveAI:
         )
 
         if inferred and "inference" not in response.lower():
-            a, c, conf = inferred[0]
-            response = f"{response} Inference hint: {a} -> {c} ({conf:.2f})."
+            a, c, conf, path = inferred[0]
+            path_txt = self.knowledge_graph._format_path(path)
+            response = f"{response} Inference hint: {a} -> {c} ({conf:.2f}) via {path_txt}."
 
         self.context_memory.add_interaction(user_text, response, sentiment)
         self.vector_memory.upsert_memory(response, kind="response", reward=0.01)
@@ -453,7 +640,7 @@ class AdaptiveCognitiveAI:
         thinking = (
             f"sentiment={sentiment:.2f}; evidence={evidence:.2f}; posterior={confidence:.2f}; "
             f"facts_used={len(facts)}; plan_steps={len(plan)}; {rationale}; "
-            f"boot_status={self._boot_info}"
+            f"kg_explain={explain_trace}; boot_status={self._boot_info}"
         )
 
         return CognitiveResult(
