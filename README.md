@@ -99,3 +99,7 @@ If your Render dashboard has custom commands, ensure they are exactly:
 - Start command: `python adaptive_cognitive_ai.py`
 
 Also pin Python to 3.12 for torch wheel compatibility (this repo includes `runtime.txt`).
+
+If you see `No matching distribution found for requirements.txt`, your build command is wrong; use `pip install -r requirements.txt` (note `-r`).
+
+The app now degrades gracefully when `torch` is unavailable (symbolic response fallback), but for best quality keep CPU torch installed from `requirements.txt`.

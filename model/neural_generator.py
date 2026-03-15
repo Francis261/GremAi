@@ -1,12 +1,22 @@
 import json
 import math
+import os
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+TORCH_AVAILABLE = True
+try:
+    if os.getenv("FORCE_DISABLE_TORCH", "0") == "1":
+        raise ModuleNotFoundError("torch disabled by FORCE_DISABLE_TORCH")
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+except ModuleNotFoundError:
+    TORCH_AVAILABLE = False
+    torch = None  # type: ignore
+    nn = None  # type: ignore
+    F = None  # type: ignore
 
 
 class BPETokenizer:
@@ -114,14 +124,16 @@ class BPETokenizer:
         return tok
 
 
-class GRULM(nn.Module):
+class GRULM(nn.Module if TORCH_AVAILABLE else object):
     def __init__(self, vocab_size: int, embed_dim: int = 128, hidden_dim: int = 256):
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("torch is required for GRULM")
         super().__init__()
         self.embed = nn.Embedding(vocab_size, embed_dim)
         self.gru = nn.GRU(embed_dim, hidden_dim, batch_first=True)
         self.proj = nn.Linear(hidden_dim, vocab_size)
 
-    def forward(self, x: torch.Tensor, h: Optional[torch.Tensor] = None):
+    def forward(self, x: Any, h: Optional[Any] = None):
         e = self.embed(x)
         out, h = self.gru(e, h)
         logits = self.proj(out)
@@ -133,7 +145,7 @@ class NeuralGenerator:
 
     def __init__(self, artifact_dir: str = "artifacts/neural", device: str = "cpu"):
         self.artifact_dir = Path(artifact_dir)
-        self.device = torch.device(device)
+        self.device = torch.device(device) if TORCH_AVAILABLE else None
         self.tokenizer_path = self.artifact_dir / "tokenizer.json"
         self.model_path = self.artifact_dir / "gru_lm.pt"
         self.meta_path = self.artifact_dir / "meta.json"
@@ -145,6 +157,9 @@ class NeuralGenerator:
 
     def load(self) -> None:
         self.tokenizer = BPETokenizer.load(self.tokenizer_path)
+        if not TORCH_AVAILABLE:
+            self.model = None
+            return
         meta = json.loads(self.meta_path.read_text())
         self.model = GRULM(len(self.tokenizer.id_to_token), meta["embed_dim"], meta["hidden_dim"]).to(self.device)
         self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
@@ -162,6 +177,15 @@ class NeuralGenerator:
         clean = [t.strip() for t in texts if t and t.strip()]
         if len(clean) < 8:
             return {"loss": 0.0, "perplexity": float("inf"), "samples": len(clean)}
+        if not TORCH_AVAILABLE:
+            tokenizer = BPETokenizer(vocab_size=vocab_size)
+            tokenizer.train(clean)
+            self.artifact_dir.mkdir(parents=True, exist_ok=True)
+            tokenizer.save(self.tokenizer_path)
+            self.meta_path.write_text(json.dumps({"embed_dim": embed_dim, "hidden_dim": hidden_dim, "epochs": 0, "torch": False}))
+            self.tokenizer = tokenizer
+            self.model = None
+            return {"loss": 0.0, "perplexity": float("inf"), "samples": len(clean), "note": "torch_unavailable"}
 
         tokenizer = BPETokenizer(vocab_size=vocab_size)
         tokenizer.train(clean)
@@ -213,8 +237,11 @@ class NeuralGenerator:
     ) -> Tuple[str, Dict[str, float]]:
         if self.model is None or self.tokenizer is None:
             if not self.is_ready():
-                return "", {"avg_entropy": 0.0, "steps": 0}
+                return "", {"avg_entropy": 0.0, "steps": 0, "mode": "empty"}
             self.load()
+
+        if not TORCH_AVAILABLE:
+            return "", {"avg_entropy": 0.0, "steps": 0, "mode": "torch_unavailable"}
 
         assert self.model is not None and self.tokenizer is not None
         self.model.eval()
