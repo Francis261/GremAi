@@ -1,0 +1,4 @@
+text,subject,relation,object
+deployment requires build artifacts,deployment,requires,build artifacts
+monitoring causes faster incident response,monitoring,causes,faster incident response
+container is a packaging unit,container,is_a,packaging unit

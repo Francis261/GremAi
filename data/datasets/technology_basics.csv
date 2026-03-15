@@ -1,0 +1,4 @@
+text,subject,relation,object
+python is a programming language,python,is_a,programming language
+api is a communication interface,api,is_a,interface
+server requires network,server,requires,network

@@ -1,0 +1,4 @@
+text,subject,relation,object
+earth is a planet,earth,is_a,planet
+nile is a river,nile,is_a,river
+lagos is a city,lagos,is_a,city

@@ -196,8 +196,8 @@ class ContextMemory:
 class ResponseGeneratorDynamic:
     """Builds responses from reasoning signals, memory, and feedback-learned patterns."""
 
-    positive_words = {"great", "good", "helpful", "thanks", "excellent", "love", "happy"}
-    negative_words = {"bad", "wrong", "hate", "angry", "terrible", "sad", "upset"}
+    positive_words = {"great", "good", "helpful", "thanks", "excellent", "love", "happy", "awesome"}
+    negative_words = {"bad", "wrong", "hate", "angry", "terrible", "sad", "upset", "frustrated"}
 
     def __init__(self):
         self.pattern_memory: Dict[str, float] = {}
@@ -221,14 +221,14 @@ class ResponseGeneratorDynamic:
             return []
         goal = " ".join(words[:4])
         return [
-            f"define_goal:{goal}",
-            f"gather_resources:{', '.join(words[:3])}",
-            "execute_sequence:ordered_subtasks",
-            "evaluate_result:feedback_loop",
+            f"Define goal: {goal}",
+            f"Collect resources: {', '.join(words[:3])}",
+            "Execute subtasks in order",
+            "Evaluate outcome and adapt",
         ]
 
     def update_pattern(self, response: str, reward: float) -> None:
-        key = " ".join(re.findall(r"[a-zA-Z0-9']+", response.lower())[:12])
+        key = " ".join(re.findall(r"[a-zA-Z0-9']+", response.lower())[:14])
         if not key:
             return
         self.pattern_memory[key] = self.pattern_memory.get(key, 0.0) + reward
@@ -237,6 +237,26 @@ class ResponseGeneratorDynamic:
         warm = max(0.0, sentiment)
         careful = max(0.0, -sentiment)
         return {"warm": warm, "careful": careful, "neutral": 1 - abs(sentiment)}
+
+    def _extract_focus(self, user_text: str, facts: List[Tuple[str, float, dict]], salients: List[str]) -> List[str]:
+        user_tokens = [t for t in re.findall(r"[a-zA-Z0-9']+", user_text.lower()) if len(t) > 2]
+        token_weights: Dict[str, float] = {}
+        for tok in user_tokens:
+            token_weights[tok] = token_weights.get(tok, 0.0) + 2.0
+        for fact, score, _ in facts:
+            for tok in re.findall(r"[a-zA-Z0-9']+", fact.lower()):
+                if len(tok) > 2:
+                    token_weights[tok] = token_weights.get(tok, 0.0) + max(0.1, score)
+        for tok in salients:
+            if len(tok) > 2:
+                token_weights[tok] = token_weights.get(tok, 0.0) + 0.8
+        for pattern, reward in self.pattern_memory.items():
+            if reward <= 0:
+                continue
+            for tok in pattern.split():
+                if len(tok) > 2:
+                    token_weights[tok] = token_weights.get(tok, 0.0) + 0.2 * reward
+        return [t for t, _ in sorted(token_weights.items(), key=lambda x: x[1], reverse=True)[:8]]
 
     def generate(
         self,
@@ -247,57 +267,52 @@ class ResponseGeneratorDynamic:
         inferred_relations: List[Tuple[str, str, float]],
     ) -> CognitiveResult:
         sentiment = self.detect_sentiment(user_text)
-        evidence = np.mean([score for _, score, _ in facts], dtype=float) if facts else 0.0
-        confidence = self.bayesian_confidence(float(evidence))
-        plan = self.hierarchical_plan(user_text) if any(w in user_text.lower() for w in ["make", "build", "plan", "organize", "prepare"]) else []
-
-        fact_tokens = []
-        for fact, _, _ in facts:
-            fact_tokens.extend(re.findall(r"[a-zA-Z0-9']+", fact.lower()))
-
-        base_tokens = re.findall(r"[a-zA-Z0-9']+", user_text.lower()) + fact_tokens + salients
-        token_weights: Dict[str, float] = {}
-        for tok in base_tokens:
-            token_weights[tok] = token_weights.get(tok, 0.0) + 1.0
-
-        for pattern, reward in self.pattern_memory.items():
-            for tok in pattern.split():
-                token_weights[tok] = token_weights.get(tok, 0.0) + 0.2 * max(0.0, reward)
-
-        ranked = [t for t, _ in sorted(token_weights.items(), key=lambda x: x[1], reverse=True) if len(t) > 2][:30]
+        evidence = float(np.mean([score for _, score, _ in facts])) if facts else 0.0
+        confidence = self.bayesian_confidence(evidence)
+        is_planning = any(w in user_text.lower() for w in ["make", "build", "plan", "organize", "prepare"])
+        plan = self.hierarchical_plan(user_text) if is_planning else []
         style = self._style_vector(sentiment)
+        focus_terms = self._extract_focus(user_text, facts, salients)
 
-        segments = []
-        if ranked:
-            segments.append(" ".join(ranked[:10]))
-        if facts:
-            segments.append(" ".join(re.findall(r"[a-zA-Z0-9']+", facts[0][0].lower())[:10]))
-        if inferred_relations:
-            r = inferred_relations[0]
-            segments.append(f"inferred {r[0]} {r[1]} confidence {r[2]:.2f}")
-        if context:
-            ctx_tokens = re.findall(r"[a-zA-Z0-9']+", context.lower())[:12]
-            if ctx_tokens:
-                segments.append("context " + " ".join(ctx_tokens))
-        if plan:
-            segments.append("plan " + " then ".join(plan))
-
-        response = ". ".join(s.capitalize() for s in segments if s).strip()
-        if not response:
-            response = "I infer limited evidence now and will learn from your next input"
-
-        tone_prefix = ""
+        greeting = "Hello." if re.search(r"\b(hi|hello|hey)\b", user_text.lower()) else ""
+        tone_sentence = ""
         if style["warm"] > 0.2:
-            tone_prefix = "I appreciate your positive energy. "
+            tone_sentence = "I can feel the positive tone in your message."
         elif style["careful"] > 0.2:
-            tone_prefix = "I detect frustration and will respond carefully. "
+            tone_sentence = "I notice some frustration, so I will keep this clear and careful."
 
-        response = tone_prefix + response + f". confidence={confidence:.2f}"
+        anchor_fact = facts[0][0] if facts else ""
+        anchor_sentence = f"Most relevant memory right now: {anchor_fact}." if anchor_fact else ""
 
+        inference_sentence = ""
+        if inferred_relations:
+            a, c, conf = inferred_relations[0]
+            inference_sentence = f"Graph inference suggests {a} -> {c} (confidence {conf:.2f})."
+
+        focus_sentence = f"Key focus terms: {', '.join(focus_terms)}." if focus_terms else ""
+
+        plan_sentence = ""
+        if plan:
+            numbered = " ".join([f"{idx + 1}) {step}." for idx, step in enumerate(plan)])
+            plan_sentence = f"Proposed plan: {numbered}"
+
+        context_sentence = ""
+        if context:
+            ctx_tokens = re.findall(r"[a-zA-Z0-9']+", context.lower())[:8]
+            if ctx_tokens:
+                context_sentence = f"I am using recent context tokens: {', '.join(ctx_tokens)}."
+
+        segments = [greeting, tone_sentence, anchor_sentence, inference_sentence, focus_sentence, plan_sentence, context_sentence]
+        response = " ".join([s for s in segments if s]).strip()
+        if not response:
+            response = "I have limited evidence right now, but I can learn quickly from more examples and feedback."
+        response += f" Overall confidence: {confidence:.2f}."
+
+        context_token_count = len(re.findall(r"[a-zA-Z0-9']+", context))
         thinking = (
             f"sentiment={sentiment:.2f}; evidence={evidence:.2f}; posterior={confidence:.2f}; "
-            f"facts_used={len(facts)}; context_tokens={len(re.findall(r"[a-zA-Z0-9']+", context))}; "
-            f"plan_steps={len(plan)}"
+            f"facts_used={len(facts)}; context_tokens={context_token_count}; "
+            f"plan_steps={len(plan)}; focus_terms={focus_terms[:4]}"
         )
 
         return CognitiveResult(
@@ -375,6 +390,10 @@ class ChatUI:
 
     def __init__(self):
         self.ai = AdaptiveCognitiveAI()
+        self.dataset_dir = Path("data/datasets")
+
+    def _available_datasets(self) -> List[str]:
+        return [p.name for p in sorted(self.dataset_dir.glob("*.csv"))]
 
     def _handle_message(self, message: str, history: List[dict]):
         history = history or []
@@ -392,7 +411,18 @@ class ChatUI:
             return "Upload a CSV file first."
         return self.ai.bulk_train_csv(file_obj.name)
 
+    def _train_selected(self, selected_files: List[str]) -> str:
+        if not selected_files:
+            return "Select at least one dataset."
+        trained = []
+        for name in selected_files:
+            path = self.dataset_dir / name
+            if path.exists():
+                trained.append(f"{name}: {self.ai.bulk_train_csv(str(path))}")
+        return "\n".join(trained) if trained else "No valid dataset paths were selected."
+
     def launch(self):
+        datasets = self._available_datasets()
         with gr.Blocks(title="Adaptive Cognitive AI") as demo:
             gr.Markdown("# Adaptive Cognitive AI\nDynamic interpretable cognition with memory, graph inference, and training.")
             chatbot = gr.Chatbot(label="Conversation", height=420)
@@ -408,15 +438,19 @@ class ChatUI:
                 feedback_status = gr.Textbox(label="Feedback status")
 
             gr.Markdown("## Training Interface")
+            with gr.Row():
+                dataset_select = gr.Dropdown(choices=datasets, multiselect=True, label="Select bundled datasets")
+                train_selected_btn = gr.Button("Train Selected Datasets")
             file_in = gr.File(label="Upload CSV (columns: text, subject, relation, object)")
-            train_btn = gr.Button("Run Bulk Training")
-            train_out = gr.Textbox(label="Training output")
+            train_btn = gr.Button("Run Bulk Training from Uploaded CSV")
+            train_out = gr.Textbox(label="Training output", lines=8)
 
             send.click(self._handle_message, inputs=[msg, state], outputs=[chatbot, state, retrieved])
             msg.submit(self._handle_message, inputs=[msg, state], outputs=[chatbot, state, retrieved])
             up.click(lambda: self._feedback(True), outputs=feedback_status)
             down.click(lambda: self._feedback(False), outputs=feedback_status)
             train_btn.click(self._bulk_train, inputs=file_in, outputs=train_out)
+            train_selected_btn.click(self._train_selected, inputs=dataset_select, outputs=train_out)
 
             gr.Markdown(
                 """

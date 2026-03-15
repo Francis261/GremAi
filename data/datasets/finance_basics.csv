@@ -1,0 +1,4 @@
+text,subject,relation,object
+budget requires income,budget,requires,income
+saving is a financial habit,saving,is_a,habit
+inflation causes price increase,inflation,causes,price increase

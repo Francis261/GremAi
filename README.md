@@ -26,7 +26,7 @@ pip install numpy gradio
 python train_ai.py
 ```
 
-This consumes all CSV files in `data/datasets/` and writes a warmed-up `cognitive_memory.db` so hosted deployments can chat immediately.
+This consumes all CSV files in `data/datasets/` (20 bundled datasets) and writes a warmed-up `cognitive_memory.db` so hosted deployments can chat immediately.
 
 ## Run
 
@@ -35,6 +35,12 @@ python adaptive_cognitive_ai.py
 ```
 
 Open: <http://localhost:7860>
+
+## Training from UI
+
+- Select one or more bundled datasets in **Select bundled datasets**.
+- Click **Train Selected Datasets**.
+- You can still upload your own CSV and run **Run Bulk Training from Uploaded CSV**.
 
 ## CSV training format
 

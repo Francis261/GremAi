@@ -1,0 +1,4 @@
+text,subject,relation,object
+algebra is a branch of mathematics,algebra,is_a,mathematics branch
+probability is a mathematical field,probability,is_a,mathematical field
+statistics requires data,statistics,requires,data

@@ -1,0 +1,4 @@
+text,subject,relation,object
+testing improves software quality,testing,causes,software quality
+version control requires commits,version control,requires,commits
+debugging requires observation,debugging,requires,observation

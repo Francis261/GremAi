@@ -1,0 +1,4 @@
+text,subject,relation,object
+support ticket requires issue details,support ticket,requires,issue details
+empathy causes better support,empathy,causes,better support
+response time affects satisfaction,response time,causes,satisfaction

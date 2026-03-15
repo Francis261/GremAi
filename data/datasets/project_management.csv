@@ -1,0 +1,4 @@
+text,subject,relation,object
+project plan requires milestones,project plan,requires,milestones
+risk register requires mitigation strategy,risk register,requires,mitigation strategy
+retrospective causes process improvement,retrospective,causes,process improvement
