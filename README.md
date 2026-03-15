@@ -1,0 +1,45 @@
+# Adaptive Cognitive AI (No LLM)
+
+A fully dynamic, interpretable, CPU-friendly cognitive AI prototype in Python with:
+
+- Dynamic reasoning + response generation (no static response templates)
+- Bayesian confidence updates
+- Hierarchical planning for multi-step tasks
+- SQLite vector memory and retrieval (RAG-style top-k facts)
+- Circular convolution for relation encoding
+- Dynamic knowledge graph + transitive inference
+- Short-term and long-term context memory
+- Interactive Gradio chat UI with visible internal thinking
+- Feedback-based self-learning and bulk CSV training
+
+## Install
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install numpy gradio
+```
+
+## Run
+
+```bash
+python adaptive_cognitive_ai.py
+```
+
+Open: <http://localhost:7860>
+
+## CSV training format
+
+Use headers like:
+
+```csv
+text,subject,relation,object
+cat is a mammal,,,
+,mammal,is_a,vertebrate
+```
+
+## Notes
+
+- The system is intentionally interpretable and does not use pretrained LLMs.
+- Embeddings are deterministic hash-projection vectors stored in SQLite.
+- You can inspect `cognitive_memory.db` directly with SQLite tools.
