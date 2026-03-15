@@ -20,6 +20,14 @@ source .venv/bin/activate
 pip install numpy gradio
 ```
 
+## Pre-train with bundled datasets
+
+```bash
+python train_ai.py
+```
+
+This consumes all CSV files in `data/datasets/` and writes a warmed-up `cognitive_memory.db` so hosted deployments can chat immediately.
+
 ## Run
 
 ```bash
@@ -42,4 +50,4 @@ cat is a mammal,,,
 
 - The system is intentionally interpretable and does not use pretrained LLMs.
 - Embeddings are deterministic hash-projection vectors stored in SQLite.
-- You can inspect `cognitive_memory.db` directly with SQLite tools.
+- `cognitive_memory.db` is committed after offline training for instant startup memory.

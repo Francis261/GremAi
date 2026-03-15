@@ -1,0 +1,5 @@
+text,subject,relation,object
+I feel happy and excited,tone,has_state,positive
+I am grateful and calm,tone,has_state,positive
+I am upset and frustrated,tone,has_state,negative
+this response is bad and wrong,tone,has_state,negative

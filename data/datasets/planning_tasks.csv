@@ -1,0 +1,7 @@
+text,subject,relation,object
+make coffee requires water,make coffee,requires,water
+make coffee requires coffee beans,make coffee,requires,coffee beans
+make coffee requires heat,make coffee,requires,heat
+organize a meeting requires agenda,organize meeting,requires,agenda
+organize a meeting requires attendees,organize meeting,requires,attendees
+build a study plan requires schedule,study plan,requires,schedule

@@ -1,0 +1,5 @@
+text,subject,relation,object
+dark clouds cause higher rain probability,dark clouds,causes,rain
+high humidity causes rain probability increase,high humidity,causes,rain
+low pressure causes storm probability increase,low pressure,causes,storm
+clear sky is a weather condition,clear sky,is_a,weather condition

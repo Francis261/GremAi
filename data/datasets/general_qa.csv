@@ -1,0 +1,6 @@
+text,subject,relation,object
+sqlite is a database,sqlite,is_a,database
+numpy is a library,numpy,is_a,library
+a vector is a numeric representation,vector,is_a,representation
+knowledge graph is a structured memory,knowledge graph,is_a,structured memory
+bayesian update is a probabilistic method,bayesian update,is_a,method

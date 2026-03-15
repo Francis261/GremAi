@@ -1,0 +1,9 @@
+text,subject,relation,object
+water is a compound,water,is_a,compound
+photosynthesis is a process,photosynthesis,is_a,process
+a mammal is an animal,mammal,is_a,animal
+an animal is an organism,animal,is_a,organism
+a robin is a bird,robin,is_a,bird
+a bird is an animal,bird,is_a,animal
+electric current causes magnetic fields,electric current,causes,magnetic fields
+plants require sunlight,plants,requires,sunlight

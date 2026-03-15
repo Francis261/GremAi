@@ -1,0 +1,7 @@
+text,subject,relation,object
+hello,conversation,has_intent,greeting
+hi there,conversation,has_intent,greeting
+good morning,conversation,has_intent,greeting
+nice to meet you,conversation,has_intent,greeting
+thank you for your help,conversation,has_intent,gratitude
+I appreciate your support,conversation,has_intent,gratitude
