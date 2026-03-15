@@ -4,6 +4,9 @@ Hybrid symbolic + neural cognitive AI prototype in Python with:
 
 - Dynamic reasoning, Bayesian confidence, hierarchical planning
 - SQLite vector memory and retrieval (RAG-style top-k facts)
+- Pluggable encoder interface (`encode(text)`) with fallback hash encoder
+- Local trainable sentence encoder (co-occurrence + SVD, CPU-friendly)
+- MMR/diversity-aware retrieval + optional recency weighting
 - Circular convolution for relation encoding
 - Dynamic knowledge graph with transitive inference
 - Short-term and long-term context memory
@@ -25,7 +28,7 @@ pip install numpy gradio torch
 python train_ai.py
 ```
 
-This ingests all CSV files in `data/datasets/`, updates `cognitive_memory.db`, and builds neural artifacts under `artifacts/neural/`.
+This ingests all CSV files in `data/datasets/`, updates `cognitive_memory.db`, trains local encoder artifacts under `artifacts/encoder/`, and builds neural artifacts under `artifacts/neural/`.
 
 ## Run
 
@@ -34,6 +37,14 @@ python adaptive_cognitive_ai.py
 ```
 
 Open: <http://localhost:7860>
+
+## Re-embed existing memory DB after encoder changes
+
+```bash
+python scripts/reembed_memory.py --db cognitive_memory.db --encoder local_svd
+```
+
+This recomputes all vector embeddings and updates `metadata.encoder_version` for migration safety.
 
 ## Training from UI
 

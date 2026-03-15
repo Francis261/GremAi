@@ -41,6 +41,11 @@ def main() -> None:
         ai.apply_feedback(reward_positive)
         print(f"[chat-{i}] conf={result.confidence:.2f} sentiment={result.sentiment:.2f} reward={'+' if reward_positive else '-'}")
 
+    # train/update local sentence encoder and refresh embeddings
+    enc_metrics = ai.vector_memory.train_local_encoder(ai._encoder_corpus())
+    reembed_count = ai.vector_memory.reembed_all(target_encoder="local_svd")
+    print(f"[encoder] metrics={enc_metrics} reembedded={reembed_count}")
+
     # retrain neural model with newest chat logs + memory corpus
     metrics = ai.neural_bridge.ensure_ready(ai.dataset_dir, ai.vector_memory, ai.chat_log_path)
     print(f"[neural] metrics={metrics}")

@@ -12,6 +12,7 @@ import gradio as gr
 import numpy as np
 
 from model.neural_generator import NeuralGenerator
+from model.sentence_encoder import HashEncoder, LocalSentenceEncoder
 
 
 @dataclass
@@ -26,13 +27,31 @@ class CognitiveResult:
 
 
 class VectorMemorySQLite:
-    """SQLite-backed vector memory for facts, responses and relation embeddings."""
+    """SQLite-backed vector memory with pluggable encoder and adaptive retrieval."""
 
-    def __init__(self, db_path: str = "cognitive_memory.db", embedding_dim: int = 128):
+    def __init__(
+        self,
+        db_path: str = "cognitive_memory.db",
+        embedding_dim: int = 128,
+        encoder_backend: str = "local_svd",
+        encoder_artifact_dir: str = "artifacts/encoder",
+    ):
         self.db_path = db_path
         self.embedding_dim = embedding_dim
+        self.encoder_backend = encoder_backend
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._init_db()
+
+        self.hash_encoder = HashEncoder(dim=self.embedding_dim, version="hash-v1")
+        self.local_encoder = LocalSentenceEncoder(artifact_dir=encoder_artifact_dir, dim=self.embedding_dim)
+        if not self.local_encoder.load():
+            self.local_encoder.trained = False
+
+    @property
+    def encoder_version(self) -> str:
+        if self.encoder_backend == "local_svd" and self.local_encoder.trained:
+            return self.local_encoder.version
+        return self.hash_encoder.version
 
     def _init_db(self) -> None:
         cur = self.conn.cursor()
@@ -51,21 +70,22 @@ class VectorMemorySQLite:
         )
         self.conn.commit()
 
-    def _token_to_seed(self, token: str) -> int:
-        return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
+    def train_local_encoder(self, texts: List[str]) -> Dict[str, float]:
+        metrics = self.local_encoder.fit(texts)
+        if self.local_encoder.trained:
+            self.local_encoder.save()
+        return metrics
+
+    def encode(self, text: str) -> np.ndarray:
+        """Encoder interface. Uses local trainable encoder when available, hash fallback otherwise."""
+        if self.encoder_backend == "local_svd" and self.local_encoder.trained:
+            vec = self.local_encoder.encode(text)
+            if np.linalg.norm(vec) > 0:
+                return vec
+        return self.hash_encoder.encode(text)
 
     def embed_text(self, text: str) -> np.ndarray:
-        tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
-        if not tokens:
-            return np.zeros(self.embedding_dim, dtype=np.float32)
-
-        vec = np.zeros(self.embedding_dim, dtype=np.float32)
-        for token in tokens:
-            rng = np.random.default_rng(self._token_to_seed(token))
-            vec += rng.normal(0.0, 1.0, self.embedding_dim).astype(np.float32)
-
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 0 else vec
+        return self.encode(text)
 
     def circular_convolution(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         conv = np.fft.ifft(np.fft.fft(a) * np.fft.fft(b)).real.astype(np.float32)
@@ -73,9 +93,16 @@ class VectorMemorySQLite:
         return conv / norm if norm > 0 else conv
 
     def upsert_memory(self, text: str, kind: str = "fact", reward: float = 0.0, metadata: Optional[dict] = None) -> None:
-        metadata = metadata or {}
-        emb = self.embed_text(text).tobytes()
+        incoming_meta = metadata or {}
+        incoming_meta["encoder_version"] = self.encoder_version
+        emb = self.encode(text).astype(np.float32).tobytes()
+
         cur = self.conn.cursor()
+        cur.execute("SELECT metadata FROM vectors WHERE text=?", (text,))
+        row = cur.fetchone()
+        existing_meta = json.loads(row[0]) if row and row[0] else {}
+        merged_meta = {**existing_meta, **incoming_meta}
+
         cur.execute(
             """
             INSERT INTO vectors (text, kind, embedding, usage_count, reward, metadata)
@@ -83,29 +110,72 @@ class VectorMemorySQLite:
             ON CONFLICT(text) DO UPDATE SET
                 usage_count = usage_count + 1,
                 reward = reward + excluded.reward,
-                metadata = excluded.metadata
+                metadata = excluded.metadata,
+                embedding = excluded.embedding,
+                kind = excluded.kind
             """,
-            (text, kind, emb, reward, json.dumps(metadata)),
+            (text, kind, emb, reward, json.dumps(merged_meta)),
         )
         self.conn.commit()
 
-    def fetch_top_k(self, query: str, k: int = 5, kind: Optional[str] = None) -> List[Tuple[int, str, float, dict]]:
-        query_vec = self.embed_text(query)
+    def fetch_top_k(
+        self,
+        query: str,
+        k: int = 5,
+        kind: Optional[str] = None,
+        mmr_lambda: float = 0.72,
+        candidate_pool: int = 30,
+        recency_alpha: float = 0.06,
+    ) -> List[Tuple[int, str, float, dict]]:
+        """
+        Fetch top-k with relevance + reward/use priors + optional recency and MMR diversity.
+        """
+        query_vec = self.encode(query)
         cur = self.conn.cursor()
         if kind:
             cur.execute("SELECT id, text, embedding, reward, usage_count, metadata FROM vectors WHERE kind=?", (kind,))
         else:
             cur.execute("SELECT id, text, embedding, reward, usage_count, metadata FROM vectors")
 
-        scored = []
-        for rid, text, emb_blob, reward, usage_count, metadata in cur.fetchall():
-            emb = np.frombuffer(emb_blob, dtype=np.float32)
-            sim = float(np.dot(query_vec, emb)) if emb.size == query_vec.size else 0.0
-            adaptive_score = sim + 0.05 * math.tanh(reward) + 0.02 * math.log1p(max(usage_count, 1))
-            scored.append((rid, text, adaptive_score, json.loads(metadata or "{}")))
+        rows = cur.fetchall()
+        if not rows:
+            return []
 
-        scored.sort(key=lambda x: x[2], reverse=True)
-        return scored[:k]
+        max_id = max(r[0] for r in rows)
+        candidates = []
+        for rid, text, emb_blob, reward, usage_count, metadata in rows:
+            emb = np.frombuffer(emb_blob, dtype=np.float32)
+            if emb.size != query_vec.size:
+                continue
+            sim = float(np.dot(query_vec, emb))
+            recency = rid / max(max_id, 1)
+            base = sim + 0.05 * math.tanh(reward) + 0.02 * math.log1p(max(usage_count, 1)) + recency_alpha * recency
+            candidates.append((rid, text, base, json.loads(metadata or "{}"), emb))
+
+        if not candidates:
+            return []
+
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        pool = candidates[: max(k, candidate_pool)]
+
+        selected: List[Tuple[int, str, float, dict, np.ndarray]] = []
+        while pool and len(selected) < k:
+            if not selected:
+                selected.append(pool.pop(0))
+                continue
+
+            best_idx = -1
+            best_score = -1e9
+            for idx, cand in enumerate(pool):
+                _, _, rel, _, emb = cand
+                max_div_sim = max(float(np.dot(emb, sel[4])) for sel in selected)
+                mmr_score = mmr_lambda * rel - (1 - mmr_lambda) * max_div_sim
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = idx
+            selected.append(pool.pop(best_idx))
+
+        return [(rid, text, score, meta) for rid, text, score, meta, _ in selected]
 
     def all_texts(self, kinds: Optional[List[str]] = None) -> List[str]:
         cur = self.conn.cursor()
@@ -115,6 +185,22 @@ class VectorMemorySQLite:
         else:
             cur.execute("SELECT text FROM vectors")
         return [r[0] for r in cur.fetchall()]
+
+    def reembed_all(self, target_encoder: Optional[str] = None) -> int:
+        if target_encoder:
+            self.encoder_backend = target_encoder
+        cur = self.conn.cursor()
+        cur.execute("SELECT id, text, metadata FROM vectors")
+        rows = cur.fetchall()
+        updated = 0
+        for rid, text, metadata in rows:
+            emb = self.encode(text).astype(np.float32).tobytes()
+            md = json.loads(metadata or "{}")
+            md["encoder_version"] = self.encoder_version
+            cur.execute("UPDATE vectors SET embedding=?, metadata=? WHERE id=?", (emb, json.dumps(md), rid))
+            updated += 1
+        self.conn.commit()
+        return updated
 
 
 class KnowledgeGraph:
@@ -287,7 +373,31 @@ class AdaptiveCognitiveAI:
         self.dataset_dir = Path("data/datasets")
         self.chat_log_path = Path("data/chat_logs.txt")
         self.last_response: Optional[str] = None
-        self._boot_info = self.neural_bridge.ensure_ready(self.dataset_dir, self.vector_memory, self.chat_log_path)
+
+        encoder_metrics = self._ensure_sentence_encoder()
+        neural_metrics = self.neural_bridge.ensure_ready(self.dataset_dir, self.vector_memory, self.chat_log_path)
+        self._boot_info = {"encoder": encoder_metrics, "neural": neural_metrics}
+
+    def _encoder_corpus(self) -> List[str]:
+        texts: List[str] = []
+        for csv_file in sorted(self.dataset_dir.glob("*.csv")):
+            with open(csv_file, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get("text"):
+                        texts.append(row["text"])
+                    if row.get("subject") and row.get("relation") and row.get("object"):
+                        texts.append(f"{row['subject']} {row['relation']} {row['object']}")
+        if self.chat_log_path.exists():
+            texts.extend([x.strip() for x in self.chat_log_path.read_text(encoding="utf-8").splitlines() if x.strip()])
+        texts.extend(self.vector_memory.all_texts(["fact", "response"]))
+        return texts
+
+    def _ensure_sentence_encoder(self) -> Dict[str, float]:
+        if self.vector_memory.local_encoder.trained:
+            return {"status": 1.0, "version": self.vector_memory.encoder_version}
+        metrics = self.vector_memory.train_local_encoder(self._encoder_corpus())
+        return {**metrics, "version": self.vector_memory.encoder_version}
 
     def _ingest_text(self, text: str) -> None:
         self.vector_memory.upsert_memory(text, kind="fact", reward=0.01)

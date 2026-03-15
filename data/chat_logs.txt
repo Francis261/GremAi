@@ -20,3 +20,25 @@ user: organize a meeting for tomorrow
 assistant: plan requires schedule Inference hint: mammal -> organism (0.81).
 user: thanks, this was helpful
 assistant: causes process improvement Inference hint: mammal -> organism (0.81).
+user: Hello, explain how to prepare coffee and why steps matter
+assistant: control requires commits
+user: hello, I feel great today
+assistant: requires network Inference hint: mammal -> organism (0.81).
+user: what do you know about photosynthesis
+assistant: king requires oven Inference hint: mammal -> organism (0.81).
+user: cat is a mammal
+assistant: t requires data Inference hint: mammal -> organism (0.81).
+user: mammal is an animal
+assistant: is a mammal. graph inference suggests mammal -> organism (confidence 0.81). key focus terms: what, photosynthesis, you, know, about, hello, feel, great. i am using recent context tokens: user, mammal, is, an, animal, ai, most, relevant. overall confidence: 0.93.
+user: animal is an organism
+assistant: oring causes faster incident response Inference hint: mammal -> organism (0.81).
+user: make coffee for two people quickly
+assistant: causes process improvement Inference hint: mammal -> organism (0.81).
+user: I am upset because the answer was bad
+assistant: t requires build artifacts Inference hint: mammal -> organism (0.81).
+user: is rain likely with dark clouds and high humidity
+assistant: ver requires network Inference hint: mammal -> organism (0.81).
+user: organize a meeting for tomorrow
+assistant: plan requires goals Inference hint: mammal -> organism (0.81).
+user: thanks, this was helpful
+assistant: is a communication tool Inference hint: mammal -> organism (0.81).
